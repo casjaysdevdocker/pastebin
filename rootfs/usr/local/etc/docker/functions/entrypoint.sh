@@ -32,14 +32,15 @@
 __remove_extra_spaces() { sed 's/\( \)*/\1/g;s|^ ||g'; }
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 __printf_space() {
-  pad=$(printf '%0.1s' " "{1..60})
-  padlength=$1
-  string1="$2"
-  string2="$3"
-  printf '%s' "$string1"
-  printf '%*.*s' 0 $((padlength - ${#string1} - ${#string2})) "$pad"
-  printf '%s\n' "$string2"
-  string2=${string2:1}
+  local pad=$(printf '%0.1s' " "{1..60})
+  local padlength=$1
+  local string1="$2"
+  local string2="$3"
+  local message
+  message+="$(printf '%s' "$string1") "
+  message+="$(printf '%*.*s' 0 $((padlength - ${#string1} - ${#string2})) "$pad") "
+  message+="$(printf '%s\n' "$string2") "
+  printf '%s\n' "$message"
 }
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 __rm() { [ -n "$1" ] && [ -e "$1" ] && rm -Rf "${1:?}"; }
@@ -49,11 +50,11 @@ __cd() { { [ -d "$1" ] || mkdir -p "$1"; } && builtin cd "$1" || return 1; }
 __is_in_file() { [ -e "$2" ] && grep -Rsq "$1" "$2" && return 0 || return 1; }
 __curl() { curl -q -sfI --max-time 3 -k -o /dev/null "$@" &>/dev/null || return 10; }
 __find() { find "$1" -mindepth 1 -type ${2:-f,d} 2>/dev/null | grep '^' || return 10; }
-__pcheck() { [ -n "$(which pgrep 2>/dev/null)" ] && pgrep -o "$1" &>/dev/null || return 10; }
+__pcheck() { [ -n "$(which pgrep 2>/dev/null)" ] && pgrep -o "$1$" &>/dev/null || return 10; }
 __file_exists_with_content() { [ -n "$1" ] && [ -f "$1" ] && [ -s "$1" ] && return 0 || return 2; }
 __sed() { sed -i 's|'$1'|'$2'|g' "$3" &>/dev/null || sed -i "s|$1|$2|g" "$3" &>/dev/null || return 1; }
 __pgrep() { __pcheck "${1:-SERVICE_NAME}" || __ps "${1:-$SERVICE_NAME}" | grep -qv ' grep' || return 10; }
-__ps() { [ -f "$(type -P ps)" ] && ps "$@" 2>/dev/null | sed 's|:||g' | grep -Fw " ${1:-$SERVICE_NAME}" || return 10; }
+__ps() { [ -f "$(type -P ps)" ] && ps "$@" 2>/dev/null | sed 's|:||g' | grep -Fw " ${1:-$SERVICE_NAME}$" || return 10; }
 __is_dir_empty() { if [ -n "$1" ]; then [ "$(ls -A "$1" 2>/dev/null | wc -l)" -eq 0 ] && return 0 || return 1; else return 1; fi; }
 __get_ip6() { ip a 2>/dev/null | grep -w 'inet6' | awk '{print $2}' | grep -vE '^::1|^fe' | sed 's|/.*||g' | head -n1 | grep '^' || echo ''; }
 __get_ip4() { ip a 2>/dev/null | grep -w 'inet' | awk '{print $2}' | grep -vE '^127.0.0' | sed 's|/.*||g' | head -n1 | grep '^' || echo '127.0.0.1'; }
@@ -190,13 +191,28 @@ __certbot() {
   return $statusCode
 }
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+__display_user_info() {
+  if [ -n "$user_name" ] || [ -n "$user_pass" ] || [ -n "$root_user_name" ] || [ -n "$root_user_pass" ]; then
+    __banner "User info"
+    [ -n "$user_name" ] && __printf_space "40" "username:" "$user_name" && echo "$user_name"
+    [ -n "$user_pass" ] && __printf_space "40" "password:" "saved to ${USER_FILE_PREFIX}/${SERVICE_NAME}_pass" && echo "$user_pass"
+    [ -n "$root_user_name" ] && __printf_space "40" "root username:" "$root_user_name" && echo "$root_user_name"
+    [ -n "$root_user_pass" ] && __printf_space "40" "root password:" "saved to ${ROOT_FILE_PREFIX}/${SERVICE_NAME}_pass" && echo "$root_user_pass"
+    __banner ""
+  fi
+}
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 __init_config_etc() {
-  if __is_dir_empty "$CONF_DIR" || [ ! -d "$CONF_DIR" ]; then
-    if [ -d "$ETC_DIR" ]; then
-      mkdir -p "$CONF_DIR"
-      __copy_templates "$ETC_DIR/." "$CONF_DIR/"
+  local copy="no"
+  local etc_dir="${ETC_DIR:-/etc}"
+  local conf_dir="${CONF_DIR:-/config}"
+  __is_dir_empty "$conf_dir" && copy=yes
+  if [ "$copy" = "yes" ]; then
+    if [ -d "$etc_dir" ]; then
+      mkdir -p "$conf_dir"
+      __copy_templates "$etc_dir/." "$conf_dir/"
     else
-      __copy_templates "$ETC_DIR" "$CONF_DIR"
+      __copy_templates "$etc_dir" "$conf_dir"
     fi
   fi
   # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -310,18 +326,21 @@ __run_once() {
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 # run program ever n minutes
 __cron() {
-  trap '[ -f "/run/cron/$cmd" ] && rm -Rf "/run/cron/$cmd";exit 0' SIGINT ERR EXIT
-  test -n "$1" && test -z "${1//[0-9]/}" && interval=$(($1 * 60)) && shift 1 || interval="5"
+  trap 'retVal=$?;[ -f "/run/cron/$bin.run" ] && rm -Rf "/run/cron/$bin.run";[ -f "/run/cron/$bin.pid" ] && rm -Rf "/run/cron/$bin.pid";exit ${retVal:-0}' SIGINT ERR EXIT
+  [ "$1" = "--pid" ] && pid="$2" && shift 2 || pid="$$"
+  test -n "$1" && test -z "${1//[0-9]/}" && interval=$(($1 * 60)) && shift 1 || interval="300"
   [ $# -eq 0 ] && echo "Usage: cron [interval] [command]" && exit 1
   local command="$*"
-  local cmd="${CRON_NAME:-$(echo "$command" | awk -F' ' '{print $1}')}"
+  local bin="$(basename "${CRON_NAME:-$1}")"
   [ -d "/run/cron" ] || mkdir -p "/run/cron"
-  echo "$command" >"/run/cron/$cmd"
+  echo "$pid" >"/run/cron/$bin.pid"
+  echo "$command" >"/run/cron/$bin.run"
+  echo "Log is saved to /data/logs/cron.log"
   while :; do
     eval "$command"
     sleep $interval
-    [ -f "/run/cron/$cmd" ] || break
-  done 2>/dev/stderr | tee -p /data/logs/cron.log >/dev/null
+    [ -f "/run/cron/$bin.run" ] || break
+  done 2>/dev/stderr >>"/data/logs/cron.log"
 }
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 __replace() {
@@ -356,27 +375,29 @@ __symlink() {
 __file_copy() {
   local from="$1"
   local dest="$2"
-  if [ -n "$from" ] && [ -e "$from" ] && [ -n "$dest" ]; then
-    if [ -d "$from" ]; then
-      if cp -Rf "$from/." "$dest/" &>/dev/null; then
-        printf '%s\n' "Copied: $from > $dest"
-        return 0
+  if [ "$from" != "$dest" ]; then
+    if [ -n "$from" ] && [ -e "$from" ] && [ -n "$dest" ]; then
+      if [ -d "$from" ]; then
+        if cp -Rf "$from/." "$dest/" &>/dev/null; then
+          printf '%s\n' "Copied: $from > $dest"
+          return 0
+        else
+          printf '%s\n' "Copy failed: $from < $dest" >&2
+          return 1
+        fi
       else
-        printf '%s\n' "Copy failed: $from < $dest" >&2
-        return 1
+        if cp -Rf "$from" "$dest" &>/dev/null; then
+          printf '%s\n' "Copied: $from > $dest"
+          return 0
+        else
+          printf '%s\n' "Copy failed: $from < $dest" >&2
+          return 1
+        fi
       fi
     else
-      if cp -Rf "$from" "$dest" &>/dev/null; then
-        printf '%s\n' "Copied: $from > $dest"
-        return 0
-      else
-        printf '%s\n' "Copy failed: $from < $dest" >&2
-        return 1
-      fi
+      printf '%s\n' "$from does not exist" >&2
+      return 2
     fi
-  else
-    printf '%s\n' "$from does not exist" >&2
-    return 2
   fi
 }
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -401,25 +422,25 @@ __setup_directories() {
   if [ "$IS_WEB_SERVER" = "yes" ]; then
     APPLICATION_DIRS="$APPLICATION_DIRS $WWW_ROOT_DIR"
     __initialize_www_root
-    (echo "Creating directory $WWW_ROOT_DIR with permissions 755" && mkdir -p "$WWW_ROOT_DIR" && find "$WWW_ROOT_DIR" -type d -exec chmod -f 755 {} \;) 2>/dev/stderr | tee -p -a "$LOG_DIR/init.txt"
+    (echo "Creating directory $WWW_ROOT_DIR with permissions 777" && mkdir -p "$WWW_ROOT_DIR" && find "$WWW_ROOT_DIR" -type d -exec chmod -f 777 {} \;) 2>/dev/stderr | tee -p -a "/data/logs/init.txt"
   fi
   # Setup DATABASE_DIR
   if [ "$IS_DATABASE_SERVICE" = "yes" ] || [ "$USES_DATABASE_SERVICE" = "yes" ]; then
     APPLICATION_DIRS="$APPLICATION_DIRS $DATABASE_DIR"
     if __is_dir_empty "$DATABASE_DIR" || [ ! -d "$DATABASE_DIR" ]; then
-      (echo "Creating directory $DATABASE_DIR with permissions 777" && mkdir -p "$DATABASE_DIR" && chmod -f 777 "$DATABASE_DIR") 2>/dev/stderr | tee -p -a "$LOG_DIR/init.txt"
+      (echo "Creating directory $DATABASE_DIR with permissions 777" && mkdir -p "$DATABASE_DIR" && chmod -f 777 "$DATABASE_DIR") 2>/dev/stderr | tee -p -a "/data/logs/init.txt"
     fi
   fi
   # create default directories
   for filedirs in $ADD_APPLICATION_DIRS $APPLICATION_DIRS; do
     if [ -n "$filedirs" ] && [ ! -d "$filedirs" ]; then
-      (echo "Creating directory $filedirs with permissions 777" && mkdir -p "$filedirs" && chmod -f 777 "$filedirs") 2>/dev/stderr | tee -p -a "$LOG_DIR/init.txt"
+      (echo "Creating directory $filedirs with permissions 777" && mkdir -p "$filedirs" && chmod -f 777 "$filedirs") 2>/dev/stderr | tee -p -a "/data/logs/init.txt"
     fi
   done
   # create default files
   for application_files in $ADD_APPLICATION_FILES $APPLICATION_FILES; do
     if [ -n "$application_files" ] && [ ! -e "$application_files" ]; then
-      (echo "Creating file $application_files with permissions 777" && touch "$application_files" && chmod -Rf 777 "$application_files") 2>/dev/stderr | tee -p -a "$LOG_DIR/init.txt"
+      (echo "Creating file $application_files with permissions 777" && touch "$application_files" && chmod -Rf 777 "$application_files") 2>/dev/stderr | tee -p -a "/data/logs/init.txt"
     fi
   done
 }
@@ -429,20 +450,20 @@ __fix_permissions() {
   change_user="${1:-${SERVICE_USER:-root}}"
   change_group="${2:-${SERVICE_GROUP:-$change_user}}"
   [ -n "$RUNAS_USER" ] && [ "$RUNAS_USER" != "root" ] && change_user="$RUNAS_USER" && change_group="$change_user"
-  if [ -n "$change_user" ] && [ "$change_user" != "root" ]; then
+  if [ -n "$change_user" ]; then
     if grep -sq "^$change_user:" "/etc/passwd"; then
       for permissions in $ADD_APPLICATION_DIRS $APPLICATION_DIRS; do
         if [ -n "$permissions" ] && [ -e "$permissions" ]; then
-          (chown -Rf $change_user:$change_group "$permissions" && echo "changed ownership on $permissions to user:$change_user and group:$change_group") 2>/dev/stderr | tee -p -a "$LOG_DIR/init.txt"
+          (chown -Rf $change_user "$permissions" && echo "changed ownership on $permissions to user:$change_user") 2>/dev/stderr | tee -p -a "/data/logs/init.txt"
         fi
       done
     fi
   fi
-  if [ -n "$change_group" ] && [ "$change_group" != "root" ]; then
+  if [ -n "$change_group" ]; then
     if grep -sq "^$change_group:" "/etc/group"; then
       for permissions in $ADD_APPLICATION_DIRS $APPLICATION_DIRS; do
         if [ -n "$permissions" ] && [ -e "$permissions" ]; then
-          (chgrp -Rf $change_group "$permissions" && echo "changed group ownership on $permissions to group $change_group") 2>/dev/stderr | tee -p -a "$LOG_DIR/init.txt"
+          (chgrp -Rf $change_group "$permissions" && echo "changed group ownership on $permissions to group $change_group") 2>/dev/stderr | tee -p -a "/data/logs/init.txt"
         fi
       done
     fi
@@ -483,10 +504,10 @@ __set_user_group_id() {
   [ -n "$set_user" ] && [ "$set_user" != "root" ] || return
   if grep -sq "^$set_user:" "/etc/passwd" "/etc/group"; then
     if __check_for_guid "$set_gid"; then
-      groupmod -g "${set_gid}" $set_user 2>/dev/stderr | tee -p -a "$LOG_DIR/init.txt" >/dev/null && chown -Rf ":$set_gid"
+      groupmod -g "${set_gid}" $set_user 2>/dev/stderr | tee -p -a "/data/logs/init.txt" >/dev/null && chown -Rf ":$set_gid"
     fi
     if __check_for_uid "$set_uid"; then
-      usermod -u "${set_uid}" -g "${set_gid}" $set_user 2>/dev/stderr | tee -p -a "$LOG_DIR/init.txt" >/dev/null && chown -Rf $set_uid:$set_gid
+      usermod -u "${set_uid}" -g "${set_gid}" $set_user 2>/dev/stderr | tee -p -a "/data/logs/init.txt" >/dev/null && chown -Rf $set_uid:$set_gid
     fi
   fi
   export SERVICE_UID="$set_uid"
@@ -524,21 +545,36 @@ __create_service_user() {
   done
   if ! __check_for_group "$create_group"; then
     echo "creating system group $create_group"
-    groupadd --force --system -g $create_gid $create_group 2>/dev/stderr | tee -p -a "$LOG_DIR/init.txt" >/dev/null
+    groupadd --force --system -g $create_gid $create_group 2>/dev/stderr | tee -p -a "/data/logs/init.txt" >/dev/null
   fi
   if ! __check_for_user "$create_user"; then
     echo "creating system user $create_user"
-    useradd --system -u $create_uid -g $create_group -c "Account for $create_user" -d "$create_home_dir" -s /bin/false $create_user 2>/dev/stderr | tee -p -a "$LOG_DIR/init.txt" >/dev/null
+    useradd --system -u $create_uid -g $create_group -c "Account for $create_user" -d "$create_home_dir" -s /bin/false $create_user 2>/dev/stderr | tee -p -a "/data/logs/init.txt" >/dev/null
   fi
   grep -qs "$create_group" "/etc/group" || exitStatus=$((exitCode + 1))
   grep -qs "$create_user" "/etc/passwd" || exitStatus=$((exitCode + 1))
-  [ $exitStatus -eq 0 ] && export WORK_DIR="${create_home_dir:-}"
-  if [ -n "$WORK_DIR" ]; then
-    [ -d "$WORK_DIR" ] || mkdir -p "$WORK_DIR"
-    [ -d "/etc/.skel" ] && cp -Rf /etc/.skel/. "$WORK_DIR/"
+  if [ $exitStatus -eq 0 ]; then
+    export WORK_DIR="${create_home_dir:-}"
+    if [ -n "$WORK_DIR" ]; then
+      [ -d "$WORK_DIR" ] || mkdir -p "$WORK_DIR"
+      [ -d "/etc/.skel" ] && cp -Rf /etc/.skel/. "$WORK_DIR/"
+    fi
+    if [ -d "/etc/sudoers.d" ] && [ ! -f "/etc/sudoers.d/$create_user" ]; then
+      echo "$create_user ALL=(ALL)   NOPASSWD: ALL" >"/etc/sudoers.d/$create_user"
+    elif [ -f "/etc/sudoers" ] && grep -qs "$create_user" "/etc/sudoers"; then
+      echo "$create_user ALL=(ALL)   NOPASSWD: ALL" >"/etc/sudoers"
+    fi
+    export SERVICE_UID="$create_uid"
+    export SERVICE_GID="$create_gid"
+    export SERVICE_USER="$create_user"
+    export SERVICE_GROUP="$create_group"
+  else
+    export USER_UID=0
+    export USER_GID=0
+    export SERVICE_USER=root
+    export SERVICE_GROUP=root
+    exitStatus=2
   fi
-  export SERVICE_UID="$create_uid" SERVICE_GID="$create_gid"
-  export SERVICE_USER="$create_user" SERVICE_GROUP="$create_group"
   return $exitStatus
 }
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -563,19 +599,19 @@ EOF
 }
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 __exec_command() {
-  local arg=("$@")
   local bin=""
+  local arg=("$@")
   local exitCode="0"
   local cmdExec="${arg:-}"
   local pre_exec="--login -c"
-  local shell="$(type -P bash 2>/dev/null || type -P sh 2>/dev/null)"
-  bin="$(echo "${arg[@]}" | tr ' ' '\n' | grep -v '^$' | head -n1 || echo 'false')"
+  local shell="$(type -P bash 2>/dev/null || type -P dash 2>/dev/null || type -P ash 2>/dev/null || type -P sh 2>/dev/null)"
+  bin="$(echo "${arg[*]}" | tr ' ' '\n' | grep -v '^$' | head -n1 | sed 's| ||g' || echo 'bash')"
   prog="$(type -P "$bin" 2>/dev/null || echo "$bin")"
-  if [ -f "$prog" ] && [ -x "$prog" ]; then
+  if type -t $bin >/dev/null 2>&1; then
     echo "${exec_message:-Executing command: $cmdExec}"
     eval $shell $pre_exec "$cmdExec" || exitCode=1
     exitCode=$?
-  elif [ -f "$prog" ] && [ ! -x "$prog" ]; then
+  elif [ -f "$prog" ]; then
     echo "$prog is not executable"
     exitCode=98
   else
@@ -604,27 +640,25 @@ __start_init_scripts() {
     while :; do echo "Running: $(date)" >"/data/logs/init/keep_alive" && sleep 3600; done &
   else
     if [ -d "$init_dir" ]; then
-      chmod -Rf 755 "$init_dir/"
       [ -f "$init_dir/service.sample" ] && rm -Rf "$init_dir"/*.sample
+      chmod -Rf 755 "$init_dir"/*.sh
       for init in "$init_dir"/*.sh; do
-        if [ -f "$init" ]; then
+        if [ -x "$init" ]; then
           name="$(basename "$init")"
           service="$(printf '%s' "$name" | sed 's/^[^-]*-//;s|.sh$||g')"
           printf '# - - - executing file: %s\n' "$init"
-          "$init"
+          eval "$init" && sleep 5 || sleep 3
           retPID=$(__get_pid "$service")
           if [ -n "$retPID" ]; then
             initStatus="0"
-            sleep 20
             printf '# - - - %s has been started - pid: %s\n' "$service" "${retPID:-error}"
           else
             initStatus="1"
-            sleep 10
             printf '# - - - %s has falied to start - check log %s\n' "$service" "docker log $CONTAINER_NAME"
           fi
           echo ""
         fi
-        retstatus=$(($initStatus + $initStatus))
+        retstatus=$(($retstatus + $initStatus))
       done
     fi
   fi
@@ -741,16 +775,7 @@ EOF
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 __initialize_web_health() {
   local www_dir="${1:-${WWW_ROOT_DIR:-/usr/share/httpd/default}}"
-  [ $# -eq 1 ] && [ -d "$www_dir" ] || return 1
-  if ! echo "$www_dir" | grep -q '/usr/share/httpd'; then
-    [ -d "$www_dir/health" ] || mkdir -p "$www_dir/health"
-    [ -f "$www_dir/health/index.txt" ] || echo 'OK' >"$www_dir/health/index.txt"
-    [ -f "$www_dir/health/index.json" ] || echo '{ "status": "OK" }' >"$www_dir/health/index.json"
-    __find_replace "REPLACE_CONTAINER_IP4" "${REPLACE_CONTAINER_IP4:-127.0.0.1}" "$www_dir"
-    __find_replace "REPLACE_COPYRIGHT_FOOTER" "${COPYRIGHT_FOOTER:-Copyright 1999 - $(date +'%Y')}" "$www_dir"
-    __find_replace "REPLACE_LAST_UPDATED_ON_MESSAGE" "${LAST_UPDATED_ON_MESSAGE:-$(date +'Last updated on: %Y-%m-%d at %H:%M:%S')}" "$www_dir"
-  fi
-  if [ -d "/usr/share/httpd" ]; then
+  if [ -d "$www_dir" ]; then
     __find_replace "REPLACE_CONTAINER_IP4" "${REPLACE_CONTAINER_IP4:-127.0.0.1}" "/usr/share/httpd"
     __find_replace "REPLACE_COPYRIGHT_FOOTER" "${COPYRIGHT_FOOTER:-Copyright 1999 - $(date +'%Y')}" "/usr/share/httpd"
     __find_replace "REPLACE_LAST_UPDATED_ON_MESSAGE" "${LAST_UPDATED_ON_MESSAGE:-$(date +'Last updated on: %Y-%m-%d at %H:%M:%S')}" "/usr/share/httpd"
@@ -831,7 +856,9 @@ __initialize_db_users() {
   db_normal_pass="${DATABASE_PASS_NORMAL:-$user_pass}"
   db_admin_user="${DATABASE_USER_ROOT:-$root_user_name}"
   db_admin_pass="${DATABASE_PASS_ROOT:-$root_user_pass}"
-  export user_name="$db_normal_user" user_pass="$db_normal_pass" root_user_name="$db_admin_user" root_user_pass="$db_admin_pass"
+  export DATABASE_USER="$db_normal_user" DATABASE_PASSWORD="$db_normal_pass"
+  export DATABASE_ROOT_USER="$db_admin_user" DATABASE_ROOT_PASSWORD="$db_admin_pass"
+  export db_normal_user db_normal_pass db_admin_user db_admin_pass
 }
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 __initialize_system_etc() {
@@ -949,26 +976,33 @@ __initialize_www_root() {
     cp -Rf "$DEFAULT_DATA_DIR/data/htdocs/." "$WWW_ROOT_DIR/" 2>/dev/null
   fi
   __initialize_web_health "$WWW_ROOT_DIR"
-  find "$WWW_ROOT_DIR" -type d -exec chmod -f 777 {} \; 2>/dev/null
 }
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 __is_htdocs_mounted() {
-  echo "$IMPORT_FROM_GIT" | grep -qE 'https://|http://|git://|ssh://' || unset IMPORT_FROM_GIT
-  if [ -n "$IMPORT_FROM_GIT" ] && [ "$(command -v "git")" ]; then
-    export WWW_ROOT_DIR="/data/htdocs"
-    __is_dir_empty "$WWW_ROOT_DIR" || WWW_ROOT_DIR="/data/wwwroot"
-    echo "Importing project from $IMPORT_FROM_GIT to $WWW_ROOT_DIR"
-    git clone -q "$IMPORT_FROM_GIT" "$WWW_ROOT_DIR"
+  WWW_ROOT_DIR="${WWW_ROOT_DIR:-/data/htdocs}"
+  [ -n "$ENV_WWW_ROOT_DIR" ] && WWW_ROOT_DIR="$ENV_WWW_ROOT_DIR"
+  [ -n "$IMPORT_FROM_GIT" ] && echo "$IMPORT_FROM_GIT" | grep -qE 'https://|http://|git://|ssh://' || unset IMPORT_FROM_GIT
+  if [ -n "$IMPORT_FROM_GIT" ] && [ "$(command -v "git" 2>/dev/null)" ]; then
+    if __is_dir_empty "$WWW_ROOT_DIR"; then
+      echo "Importing project from $IMPORT_FROM_GIT to $WWW_ROOT_DIR"
+      git clone -q "$IMPORT_FROM_GIT" "$WWW_ROOT_DIR"
+    elif [ -d "$WWW_ROOT_DIR" ]; then
+      echo "Updating the project in $WWW_ROOT_DIR"
+      git -C pull -q "$WWW_ROOT_DIR"
+    fi
   elif [ -d "/app" ]; then
-    export WWW_ROOT_DIR="/app"
+    WWW_ROOT_DIR="/app"
+  elif [ -d "/data/htdocs/www" ]; then
+    WWW_ROOT_DIR="/data/htdocs/www"
+  elif [ -d "/data/htdocs/root" ]; then
+    WWW_ROOT_DIR="/data/htdocs/root"
   elif [ -d "/data/htdocs" ]; then
-    export WWW_ROOT_DIR="/data/htdocs"
+    WWW_ROOT_DIR="/data/htdocs"
   elif [ -d "/data/wwwroot" ]; then
-    export WWW_ROOT_DIR="/data/wwwroot"
-  else
-    WWW_ROOT_DIR="${ENV_WWW_ROOT_DIR:-$WWW_ROOT_DIR}"
-    export WWW_ROOT_DIR="${WWW_ROOT_DIR:-/usr/share/httpd/default}"
+    WWW_ROOT_DIR="/data/wwwroot"
   fi
+  [ -d "$WWW_ROOT_DIR" ] || mkdir -p "$WWW_ROOT_DIR"
+  export WWW_ROOT_DIR="${WWW_ROOT_DIR:-/usr/share/httpd/default}"
 }
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 __initialize_ssl_certs() {
@@ -1011,28 +1045,24 @@ __check_service() {
 }
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 __switch_to_user() {
-  if [ "$RUNAS_USER" = "roo t" ]; then
-    su_cmd() {
-      su_exec=""
-      eval "$@" || return 1
-    }
+  if [ "$RUNAS_USER" = "root" ]; then
+    su_exec=""
+    su_cmd() { eval "$@" || return 1; }
   elif [ "$(builtin type -P gosu)" ]; then
     su_exec="gosu $RUNAS_USER"
-    su_cmd() { gosu $RUNAS_USER "$@" || return 1; }
+    su_cmd() { $su_exec "$@" || return 1; }
   elif [ "$(builtin type -P runuser)" ]; then
     su_exec="runuser -u $RUNAS_USER"
-    su_cmd() { runuser -u $RUNAS_USER "$@" || return 1; }
+    su_cmd() { $su_exec "$@" || return 1; }
   elif [ "$(builtin type -P sudo)" ]; then
     su_exec="sudo -u $RUNAS_USER"
-    su_cmd() { sudo -u $RUNAS_USER "$@" || return 1; }
+    su_cmd() { $su_exec "$@" || return 1; }
   elif [ "$(builtin type -P su)" ]; then
     su_exec="su -s /bin/sh - $RUNAS_USER"
-    su_cmd() { su -s /bin/sh - $RUNAS_USER -c "$@" || return 1; }
+    su_cmd() { $su_exec -c "$@" || return 1; }
   else
-    su_cmd() {
-      su_exec=""
-      echo "Can not switch to $RUNAS_USER: attempting to run as root" && eval "$@" || return 1
-    }
+    su_exec=""
+    su_cmd() { echo "Can not switch to $RUNAS_USER: attempting to run as root" && eval "$@" || return 1; }
   fi
   export su_exec
 }
