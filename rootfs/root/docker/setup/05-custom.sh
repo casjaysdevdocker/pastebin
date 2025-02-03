@@ -24,7 +24,7 @@ set -o pipefail
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 # Set env variables
 exitCode=0
-WWW_ROOT_DIR="/usr/share/httpd/stikked"
+WWW_ROOT_DIR="/usr/local/share/httpd/stikked"
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 # Predifined actions
 
