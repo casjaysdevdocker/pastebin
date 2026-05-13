@@ -1,6 +1,6 @@
 ## 👋 Welcome to pastebin 🚀  
 
- bash pastebin client  
+pastebin README  
   
   
 ## Install my system scripts  
@@ -19,17 +19,18 @@ dockermgr update pastebin
 ## Install and run container
   
 ```shell
-mkdir -p "$HOME/.local/share/srv/docker/pastebin/volumes"
+dockerHome="/var/lib/srv/$USER/docker/casjaysdevdocker/pastebin/pastebin/latest/rootfs"
+mkdir -p "/var/lib/srv/$USER/docker/pastebin/rootfs"
 git clone "https://github.com/dockermgr/pastebin" "$HOME/.local/share/CasjaysDev/dockermgr/pastebin"
-cp -Rfva "$HOME/.local/share/CasjaysDev/dockermgr/pastebin/rootfs/." "$HOME/.local/share/srv/docker/pastebin/volumes/"
+cp -Rfva "$HOME/.local/share/CasjaysDev/dockermgr/pastebin/rootfs/." "$dockerHome/"
 docker run -d \
 --restart always \
 --privileged \
---name casjaysdevdocker-pastebin \
+--name casjaysdevdocker-pastebin-latest \
 --hostname pastebin \
 -e TZ=${TIMEZONE:-America/New_York} \
--v "$HOME/.local/share/srv/docker/casjaysdevdocker-pastebin/volumes/data:/data:z" \
--v "$HOME/.local/share/srv/docker/casjaysdevdocker-pastebin/volumes/config:/config:z" \
+-v "$dockerHome/data:/data:z" \
+-v "$dockerHome/config:/config:z" \
 -p 80:80 \
 casjaysdevdocker/pastebin:latest
 ```
@@ -46,8 +47,8 @@ services:
       - TZ=America/New_York
       - HOSTNAME=pastebin
     volumes:
-      - "$HOME/.local/share/srv/docker/casjaysdevdocker-pastebin/volumes/data:/data:z"
-      - "$HOME/.local/share/srv/docker/casjaysdevdocker-pastebin/volumes/config:/config:z"
+      - "/var/lib/srv/$USER/docker/casjaysdevdocker/pastebin/pastebin/latest/rootfs/data:/data:z"
+      - "/var/lib/srv/$USER/docker/casjaysdevdocker/pastebin/pastebin/latest/rootfs/config:/config:z"
     ports:
       - 80:80
     restart: always
