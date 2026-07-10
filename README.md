@@ -19,8 +19,8 @@ dockermgr update pastebin
 ## Install and run container
   
 ```shell
-dockerHome="/var/lib/srv/$USER/docker/casjaysdevdocker/pastebin/pastebin/latest/rootfs"
-mkdir -p "/var/lib/srv/$USER/docker/pastebin/rootfs"
+dockerHome="/srv/$USER/docker/casjaysdevdocker/pastebin/pastebin/latest/rootfs"
+mkdir -p "/srv/$USER/docker/pastebin/rootfs"
 git clone "https://github.com/dockermgr/pastebin" "$HOME/.local/share/CasjaysDev/dockermgr/pastebin"
 cp -Rfva "$HOME/.local/share/CasjaysDev/dockermgr/pastebin/rootfs/." "$dockerHome/"
 docker run -d \
@@ -47,8 +47,8 @@ services:
       - TZ=America/New_York
       - HOSTNAME=pastebin
     volumes:
-      - "/var/lib/srv/$USER/docker/casjaysdevdocker/pastebin/pastebin/latest/rootfs/data:/data:z"
-      - "/var/lib/srv/$USER/docker/casjaysdevdocker/pastebin/pastebin/latest/rootfs/config:/config:z"
+      - "/srv/$USER/docker/casjaysdevdocker/pastebin/pastebin/latest/rootfs/data:/data:z"
+      - "/srv/$USER/docker/casjaysdevdocker/pastebin/pastebin/latest/rootfs/config:/config:z"
     ports:
       - 80:80
     restart: always
